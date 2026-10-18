@@ -1,7 +1,7 @@
 package com.stripe.android.challenge.confirmation
 
 import android.net.Uri
-import android.net.http.NetworkSecurityPolicy
+import android.security.NetworkSecurityPolicy
 import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
