@@ -323,15 +323,18 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
             while (!socket.isClosed) {
                 runCatching {
                     socket.accept().use { client ->
-                        val input = client.getInputStream().bufferedReader()
-                        val requestLine = input.readLine() ?: return@use
+                        // Read the request manually from the raw stream: a
+                        // BufferedReader would swallow the POST body into its
+                        // buffer, deadlocking body reads on the raw stream.
+                        val raw = client.getInputStream()
+                        val requestLine = readLine(raw) ?: return@use
                         val parts = requestLine.split(" ")
                         val method = parts.getOrElse(0) { "GET" }
                         val path = parts.getOrNull(1)?.substringBefore("?") ?: "/"
                         log.add("$name $method $path")
                         var contentLength = 0
                         while (true) {
-                            val line = input.readLine() ?: break
+                            val line = readLine(raw) ?: break
                             if (line.isEmpty()) break
                             if (line.startsWith("Content-Length:", ignoreCase = true)) {
                                 contentLength = line.substringAfter(":").trim().toIntOrNull() ?: 0
@@ -341,7 +344,7 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
                             val bytes = ByteArray(contentLength)
                             var read = 0
                             while (read < contentLength) {
-                                val n = client.getInputStream().read(bytes, read, contentLength - read)
+                                val n = raw.read(bytes, read, contentLength - read)
                                 if (n < 0) break
                                 read += n
                             }
@@ -367,6 +370,17 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
         }.apply {
             isDaemon = true
             start()
+        }
+
+        private fun readLine(raw: java.io.InputStream): String? {
+            val sb = StringBuilder()
+            while (true) {
+                val b = raw.read()
+                if (b == -1) return if (sb.isEmpty()) null else sb.toString()
+                if (b == '\n'.code) break
+                if (b != '\r'.code) sb.append(b.toChar())
+            }
+            return sb.toString()
         }
 
         override fun close() {
