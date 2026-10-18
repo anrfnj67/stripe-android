@@ -8,7 +8,7 @@ import com.google.common.truth.Truth.assertThat
 import com.stripe.android.TestActivity
 import com.stripe.android.core.ApiConfiguration
 import com.stripe.android.core.Logger
-import com.stripe.android.model.PaymentIntentFixtures
+import com.stripe.android.testing.PaymentIntentFactory
 import com.stripe.android.testing.FakeErrorReporter
 import java.io.Closeable
 import java.net.InetAddress
@@ -66,7 +66,7 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
     private fun createHandler(): DefaultConfirmationChallengeBridgeHandler {
         val args = IntentConfirmationChallengeArgs(
             apiConfiguration = ApiConfiguration.State(canaryPublishableKey, "acct_canary"),
-            intent = PaymentIntentFixtures.PI_SUCCEEDED.copy(clientSecret = canaryClientSecret),
+            intent = PaymentIntentFactory.create(clientSecret = canaryClientSecret),
             productUsage = listOf("PaymentSheet"),
             captchaVendorName = "hcaptcha",
         )
@@ -120,7 +120,7 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
                 val wv = IntentConfirmationChallengeWebView(activity)
                 webView = wv
                 wv.addBridgeHandler(handler)
-                wv.webViewClient = IntentConfirmationChallengeWebViewClient(
+                wv.webViewClient = IntentConfirmationWebViewClient(
                     hostUrl = parentUrl,
                     errorHandler = {},
                     logger = Logger.getInstance(enableLogging = false),
