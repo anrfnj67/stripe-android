@@ -50,11 +50,7 @@ jobs:
           api-level: 34
           arch: x86_64
           disable-animations: true
-          script: |
-            set -euo pipefail
-            ./gradlew :payments-core:connectedDebugAndroidTest \
-              -Pandroid.testInstrumentationRunnerArguments.class=com.stripe.android.challenge.confirmation.IntentConfirmationChallengeRealWebViewPoCTest \
-              | tee instrumented_poc.log
+          script: bash -eo pipefail -c './gradlew :payments-core:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.stripe.android.challenge.confirmation.IntentConfirmationChallengeRealWebViewPoCTest | tee instrumented_poc.log'
 
       - name: Evidence gate
         shell: bash
