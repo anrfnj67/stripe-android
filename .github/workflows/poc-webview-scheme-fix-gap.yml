@@ -55,7 +55,7 @@ jobs:
           api-level: 34
           arch: x86_64
           disable-animations: true
-          script: bash -eo pipefail -c './gradlew :payments-core:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.stripe.android.view.PaymentAuthWebViewSchemeFixGapRealWebViewPoCTest | tee instrumented_poc.log'
+          script: bash -eo pipefail -c './gradlew :payments-core:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.stripe.android.view.PaymentAuthWebViewSchemeFixGapRealWebViewPoCTest | tee instrumented_poc.log; adb logcat -d 2>/dev/null | grep -E "PoC-DIAG|PoC\] PASS" | tee instrumented_logcat_poc.log || true'
 
       - name: Evidence gate
         shell: bash
@@ -68,15 +68,17 @@ jobs:
           grep -q "failures=\"0\"" "$XML"
           grep -q "differential_sameDeepLinkTarget_browsableEnforcedOnlyOnIntentSchemeBranch" "$XML"
           grep -q "customSchemeUrl_launchesImplicitViewIntent_withoutBrowsableCategory" "$XML"
+          echo "unit XML: $XML"
           echo "--- instrumented gate ---"
-          grep -E "realWebViewPageNavigation.*(PASSED|passed)|tests completed" instrumented_poc.log || true
+          grep -E "realWebViewPageNavigation.*(PASSED|passed)|tests completed|Finished .* tests" instrumented_poc.log || true
           IXML=$(find payments-core/build/outputs/androidTest-results -name '*.xml' 2>/dev/null | head -1)
           test -n "$IXML"
           grep -q "failures=\"0\"" "$IXML"
           grep -q "realWebViewPageNavigation_customSchemeLaunchesNonBrowsableHandler" "$IXML"
           grep -q "realWebViewPageNavigation_intentSchemeEquivalent_isBlockedFromNonBrowsableHandler" "$IXML"
-          echo "--- PASS markers ---"
-          grep "\[PoC\] PASS" instrumented_poc.log
+          echo "instrumented XML: $IXML"
+          echo "--- PASS markers (logcat) ---"
+          cat instrumented_logcat_poc.log || true
 
       - name: Upload evidence (logs + JUnit XML)
         if: always()
@@ -86,6 +88,7 @@ jobs:
           path: |
             unit_poc.log
             instrumented_poc.log
+            instrumented_logcat_poc.log
             payments-core/build/test-results/**/*.xml
             payments-core/build/outputs/androidTest-results/**/*.xml
           if-no-files-found: warn
