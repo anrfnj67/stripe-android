@@ -151,6 +151,10 @@ internal class PaymentAuthWebViewSchemeFixGapRealWebViewPoCTest {
         val errorLatch = CountDownLatch(1)
         val isPageLoaded = MutableStateFlow(false)
         val webView = WebView(activity)
+        // WebView ships with JavaScript disabled; the PoC page uses a script
+        // to navigate to the deep link, exactly like a payment-auth redirect
+        // page would.
+        webView.settings.javaScriptEnabled = true
         val client = PaymentAuthWebViewClient(
             Logger.getInstance(enableLogging = false),
             isPageLoaded,
