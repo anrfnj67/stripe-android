@@ -1,11 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <application>
+    <!-- The test APK hosts a local loopback HTTP server that the real WebView
+         loads in the fix-gap PoC; payments-core itself does not declare
+         INTERNET (host apps normally do). -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application android:usesCleartextTraffic="true">
         <activity
             android:name="com.stripe.android.TestActivity"
             android:theme="@style/Theme.AppCompat.Light"
             android:exported="false" />
+
+        <!-- Fix-gap PoC target: a deep-link handler for the made-up `pocnb`
+             scheme that deliberately does NOT declare
+             android.intent.category.BROWSABLE. This models real handlers
+             that opt out of browser launches because they assume
+             launch-time trust. The intent:// branch of commit 1be3556
+             (+CATEGORY_BROWSABLE) cannot reach it; the unfixed
+             custom-scheme branch of PaymentAuthWebViewClient can. -->
+        <activity
+            android:name="com.stripe.android.view.NonBrowsablePoCReceiverActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="pocnb" />
+            </intent-filter>
+        </activity>
     </application>
 
 </manifest>
