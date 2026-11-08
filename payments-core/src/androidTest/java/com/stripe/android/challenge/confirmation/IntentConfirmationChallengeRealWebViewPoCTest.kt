@@ -1,6 +1,7 @@
 package com.stripe.android.challenge.confirmation
 
 import android.net.Uri
+import android.util.Log
 import android.security.NetworkSecurityPolicy
 import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
@@ -216,6 +217,11 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
             assertThat(initParams.getString("publishableKey")).isEqualTo(canaryPublishableKey)
             assertThat(initParams.getString("clientSecret")).isEqualTo(canaryClientSecret)
 
+            Log.i(
+                "RUNTIME-EVIDENCE",
+                "STOLEN initParams from cross-origin frame (origin=$origin): ${frameReport.getString("initParams")}"
+            )
+
             // 4. The same frame forged a completed-challenge result through onSuccess().
             assertThat(frameReport.getBoolean("forgedSuccessSent")).isTrue()
             val successEvent = runBlocking {
@@ -224,6 +230,11 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
                 }
             } as ConfirmationChallengeBridgeEvent.Success
             assertThat(successEvent.clientSecret).isEqualTo(forgedClientSecret)
+
+            Log.i(
+                "RUNTIME-EVIDENCE",
+                "FORGED onSuccess accepted by production handler: clientSecret=${successEvent.clientSecret}"
+            )
 
             // 5. Control: the MAIN frame also has the interface.
             assertThat(mainBodies).isNotEmpty()
