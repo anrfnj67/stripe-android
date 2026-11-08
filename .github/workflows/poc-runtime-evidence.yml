@@ -39,12 +39,7 @@ jobs:
           arch: x86_64
           disable-animations: true
           script: |
-            bash -eo pipefail -c 'set -e
-            ./gradlew :payments-core:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.stripe.android.challenge.confirmation.IntentConfirmationChallengeRealWebViewPoCTest | tee instrumented_poc.log
-            adb logcat -d -s RUNTIME-EVIDENCE:I | tee runtime_evidence.log
-            grep -q "STOLEN initParams" runtime_evidence.log
-            grep -q "clientSecret" runtime_evidence.log
-            grep -q "FORGED onSuccess" runtime_evidence.log'
+            bash -eo pipefail -c './gradlew :payments-core:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.stripe.android.challenge.confirmation.IntentConfirmationChallengeRealWebViewPoCTest | tee instrumented_poc.log && adb logcat -d -s RUNTIME-EVIDENCE:I | tee runtime_evidence.log && grep -q "STOLEN initParams" runtime_evidence.log && grep -q "clientSecret" runtime_evidence.log && grep -q "FORGED onSuccess" runtime_evidence.log'
 
       - name: Upload evidence
         if: always()
