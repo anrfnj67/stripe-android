@@ -357,6 +357,18 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
                                 contentLength = line.substringAfter(":").trim().toIntOrNull() ?: 0
                             }
                         }
+                        val body = if (contentLength > 0) {
+                            val bytes = ByteArray(contentLength)
+                            var read = 0
+                            while (read < contentLength) {
+                                val n = raw.read(bytes, read, contentLength - read)
+                                if (n < 0) break
+                                read += n
+                            }
+                            String(bytes, 0, read, Charsets.UTF_8)
+                        } else {
+                            null
+                        }
                         if (method == "POST" && path.startsWith("/collect-frame")) {
                             Log.i(
                                 "RUNTIME-EVIDENCE",
@@ -369,18 +381,6 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
                                     appendLine("======== END EXFIL HTTP REQUEST ========")
                                 }
                             )
-                        }
-                        val body = if (contentLength > 0) {
-                            val bytes = ByteArray(contentLength)
-                            var read = 0
-                            while (read < contentLength) {
-                                val n = raw.read(bytes, read, contentLength - read)
-                                if (n < 0) break
-                                read += n
-                            }
-                            String(bytes, 0, read, Charsets.UTF_8)
-                        } else {
-                            null
                         }
                         val (code, payload) = handler(method, path, body)
                         val payloadBytes = payload.toByteArray(Charsets.UTF_8)
